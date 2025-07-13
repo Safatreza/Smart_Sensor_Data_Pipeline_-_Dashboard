@@ -1,29 +1,32 @@
 # Smart Sensor Data Dashboard - User Manual
 
-A comprehensive guide to using the Smart Sensor Data Dashboard for monitoring, analyzing, and visualizing sensor data.
+A comprehensive guide to using the Smart Sensor Data Dashboard for monitoring, analyzing, and visualizing sensor data with support for SQLite and PostgreSQL/TimescaleDB backends.
 
 ## Table of Contents
 
 1. [Introduction](#introduction)
 2. [Getting Started](#getting-started)
-3. [Dashboard Interface](#dashboard-interface)
-4. [Data Management](#data-management)
-5. [API Usage](#api-usage)
-6. [Advanced Features](#advanced-features)
-7. [Troubleshooting](#troubleshooting)
-8. [Best Practices](#best-practices)
+3. [Database Configuration](#database-configuration)
+4. [Dashboard Interface](#dashboard-interface)
+5. [Data Management](#data-management)
+6. [API Usage](#api-usage)
+7. [Advanced Features](#advanced-features)
+8. [Troubleshooting](#troubleshooting)
+9. [Best Practices](#best-practices)
 
 ## Introduction
 
-The Smart Sensor Data Dashboard is a powerful tool for processing and visualizing sensor data in real-time. It provides a complete solution for data extraction, transformation, loading (ETL), and visualization through an intuitive web interface.
+The Smart Sensor Data Dashboard is a powerful tool for processing and visualizing sensor data in real-time. It provides a complete solution for data extraction, transformation, loading (ETL), and visualization through an intuitive web interface with flexible database backend support.
 
 ### Key Features
 
 - **Real-time Data Processing**: Automatically processes incoming sensor data
 - **Interactive Visualizations**: Dynamic charts and graphs for data analysis
+- **Multi-Database Support**: SQLite, PostgreSQL, and TimescaleDB backends
 - **Sensor Monitoring**: Track sensor health, battery levels, and performance
 - **Data Export**: Export data in various formats for further analysis
 - **RESTful API**: Programmatic access to all dashboard features
+- **WebSocket Support**: Real-time data streaming
 - **Multi-sensor Support**: Monitor multiple sensors simultaneously
 
 ## Getting Started
@@ -35,6 +38,7 @@ Before using the dashboard, ensure you have:
 - Python 3.8 or higher installed
 - Required dependencies installed (see requirements.txt)
 - Access to sensor data (CSV files, APIs, or databases)
+- PostgreSQL (optional, for production use)
 
 ### Installation
 
@@ -46,6 +50,10 @@ Before using the dashboard, ensure you have:
 
 2. **Install Dependencies**
    ```bash
+   # For basic functionality
+   pip install -r requirements_simple.txt
+   
+   # For full features
    pip install -r requirements.txt
    ```
 
@@ -74,11 +82,164 @@ Before using the dashboard, ensure you have:
 
 3. **Start Dashboard**
    ```bash
+   # Option 1: Use the main application
+   python main.py
+   
+   # Option 2: Use the dashboard app directly
    python dashboard/app.py
    ```
 
 4. **Access Dashboard**
-   Open your browser and navigate to `http://localhost:5000`
+   Open your browser and navigate to `http://localhost:8000`
+
+## Database Configuration
+
+The dashboard supports multiple database backends configured via the `DATABASE_URL` environment variable in your `.env` file.
+
+### SQLite (Default)
+
+**Configuration:**
+```bash
+DATABASE_URL=sqlite:///data/processed.db
+```
+
+**Pros:**
+- No setup required
+- File-based storage
+- Perfect for development and testing
+- Zero configuration
+
+**Cons:**
+- Limited concurrency
+- Not suitable for high-volume production
+- No network access
+
+**Best for:** Development, testing, small datasets
+
+### PostgreSQL
+
+**Configuration:**
+```bash
+DATABASE_URL=postgresql://user:password@localhost:5432/sensor_db
+```
+
+**Pros:**
+- Production-ready
+- Excellent concurrency
+- ACID compliance
+- Network accessible
+- Advanced features
+
+**Cons:**
+- Requires PostgreSQL installation
+- More complex setup
+- Resource intensive
+
+**Best for:** Production environments, moderate data volume
+
+### TimescaleDB (Recommended for Time-Series)
+
+**Configuration:**
+```bash
+DATABASE_URL=postgresql://user:password@localhost:5432/sensor_db
+```
+
+**Pros:**
+- Optimized for time-series data
+- Automatic partitioning
+- Hypertables for performance
+- All PostgreSQL features
+- Built-in time-series functions
+
+**Cons:**
+- Requires TimescaleDB extension
+- More complex setup than SQLite
+
+**Best for:** High-volume time-series data, production environments
+
+### Setup PostgreSQL/TimescaleDB
+
+#### 1. Install PostgreSQL
+
+**Ubuntu/Debian:**
+```bash
+sudo apt-get update
+sudo apt-get install postgresql postgresql-contrib
+```
+
+**macOS:**
+```bash
+brew install postgresql
+```
+
+**Windows:**
+Download from [PostgreSQL Downloads](https://www.postgresql.org/download/windows/)
+
+#### 2. Install TimescaleDB (Optional)
+
+**Ubuntu/Debian:**
+```bash
+sudo apt-get install timescaledb-postgresql-14
+```
+
+**macOS:**
+```bash
+brew install timescaledb
+```
+
+#### 3. Create Database and User
+
+```sql
+-- Connect to PostgreSQL as superuser
+sudo -u postgres psql
+
+-- Create database
+CREATE DATABASE sensor_db;
+
+-- Create user
+CREATE USER sensor_user WITH PASSWORD 'your_secure_password';
+
+-- Grant privileges
+GRANT ALL PRIVILEGES ON DATABASE sensor_db TO sensor_user;
+
+-- Connect to the new database
+\c sensor_db
+
+-- Enable TimescaleDB extension (if using TimescaleDB)
+CREATE EXTENSION IF NOT EXISTS timescaledb;
+
+-- Exit
+\q
+```
+
+#### 4. Update Environment Configuration
+
+```bash
+# .env file
+DATABASE_URL=postgresql://sensor_user:your_secure_password@localhost:5432/sensor_db
+```
+
+### Database Migration
+
+To switch between database backends:
+
+1. **Update Configuration**
+   ```bash
+   # Edit .env file
+   nano .env
+   # Change DATABASE_URL to new backend
+   ```
+
+2. **Run ETL Pipeline**
+   ```bash
+   python pipeline/etl_pipeline.py
+   ```
+
+3. **Verify Migration**
+   ```bash
+   # Check health endpoint
+   curl http://localhost:8000/api/health
+   ```
 
 ## Dashboard Interface
 
@@ -93,64 +254,51 @@ The dashboard is organized into several key sections:
 
 #### 2. Summary Metrics
 Four key metric cards display:
-- **Total Records**: Number of processed data records
-- **Active Sensors**: Number of currently active sensors
 - **Average Temperature**: Mean temperature across all sensors
-- **Average Humidity**: Mean humidity across all sensors
+- **Average Pressure**: Mean pressure across all sensors
+- **Alert Count**: Number of critical alerts
+- **Uptime Hours**: Total system uptime
 
 #### 3. Real-time Charts
 The main chart area shows:
 - **Temperature Trends**: Line chart of temperature over time
-- **Humidity Trends**: Line chart of humidity over time
-- **Pressure Trends**: Line chart of atmospheric pressure
-- **Interactive Controls**: Sensor filter and time range selector
+- **Pressure Trends**: Line chart of pressure over time
+- **Interactive Controls**: Date filter and refresh buttons
 
-#### 4. Sensor Status Panel
-Right sidebar displays:
-- **Sensor List**: All available sensors with status indicators
-- **Battery Levels**: Visual battery status for each sensor
-- **Signal Strength**: Connection quality indicators
-- **Health Status**: Online/offline status
-
-#### 5. Data Table
-Bottom section shows:
-- **Latest Readings**: Most recent sensor data
-- **Sortable Columns**: Click headers to sort data
-- **Search/Filter**: Find specific records quickly
+#### 4. Data Controls
+Bottom section includes:
+- **Date Filter**: Select specific date ranges
+- **Refresh Button**: Manual data refresh
+- **Download CSV**: Export data functionality
 
 ### Chart Controls
 
-#### Sensor Filter
-- **Dropdown Menu**: Select specific sensors or "All Sensors"
+#### Date Filter
+- **Date Picker**: Select specific dates for analysis
 - **Real-time Updates**: Charts update immediately when selection changes
-- **Multi-sensor View**: Compare data across multiple sensors
+- **Historical Analysis**: View data from any date range
 
 #### Time Range
-- **24 Hours**: Default view showing last 24 hours
+- **All Data**: Default view showing all available data
 - **Custom Range**: Select specific time periods
 - **Real-time**: Live data updates every 30 seconds
 
 #### Chart Types
 - **Line Charts**: Show trends over time
-- **Area Charts**: Highlight data ranges
-- **Bar Charts**: Compare discrete values
+- **Interactive Hover**: Detailed information on data points
+- **Responsive Design**: Adapts to screen size
 
 ### Interactive Features
 
 #### Hover Information
 - **Data Points**: Hover over chart points for detailed values
-- **Tooltips**: Display timestamp, sensor ID, and measurement values
+- **Tooltips**: Display timestamp and measurement values
 - **Context Menu**: Right-click for additional options
 
-#### Zoom and Pan
-- **Zoom In**: Click and drag to zoom into specific time periods
-- **Zoom Out**: Double-click to reset zoom
-- **Pan**: Click and drag to move around zoomed charts
-
 #### Export Options
-- **Chart Export**: Download charts as PNG, JPEG, or PDF
-- **Data Export**: Export chart data as CSV or JSON
-- **Print**: Print-friendly version of charts
+- **CSV Download**: Export filtered data as CSV
+- **API Access**: Programmatic data access
+- **Real-time Streaming**: WebSocket connection for live updates
 
 ## Data Management
 
@@ -161,20 +309,17 @@ The dashboard supports multiple data sources:
 #### CSV Files
 ```python
 # Example CSV format
-timestamp,sensor_id,temperature,humidity,pressure,battery_level,signal_strength
-2023-01-01 12:00:00,SENSOR_001,22.5,65.2,1013.25,85.0,92.5
+timestamp,temperature,pressure,uptime
+2023-01-01 12:00:00,22.5,1013.25,24
 ```
 
 #### Database Connections
 ```python
-# PostgreSQL
+# PostgreSQL/TimescaleDB
 DATABASE_URL=postgresql://user:password@localhost/sensor_db
 
-# MySQL
-DATABASE_URL=mysql://user:password@localhost/sensor_db
-
 # SQLite (default)
-DATABASE_URL=data/processed.db
+DATABASE_URL=sqlite:///data/processed.db
 ```
 
 #### REST APIs
@@ -193,19 +338,19 @@ The ETL (Extract, Transform, Load) pipeline processes data in three stages:
 1. **Extract**
    ```python
    # Extract data from source
-   raw_data = etl.extract_raw_data("data/raw_sensors.csv")
+   raw_data = etl.extract_data("data/raw_sensors.csv")
    ```
 
 2. **Transform**
    ```python
    # Clean and process data
-   processed_data = etl.transform_data(raw_data)
+   processed_data, kpis = etl.transform_data(raw_data)
    ```
 
 3. **Load**
    ```python
-   # Store in database
-   etl.load_data(processed_data, "sensor_data")
+   # Store in configured database
+   etl.load_data(processed_data)
    ```
 
 #### Data Cleaning
@@ -220,20 +365,20 @@ The system automatically:
 
 Additional features are added:
 - **Time Features**: Hour, day of week, month
-- **Derived Metrics**: Temperature in Fahrenheit, humidity categories
+- **Derived Metrics**: Temperature ranges, pressure categories
 - **Calculated Fields**: Moving averages, trends
 
 ### Data Retention
 
 #### Storage Policies
 - **Raw Data**: Stored in CSV files (configurable retention)
-- **Processed Data**: Stored in SQLite database
+- **Processed Data**: Stored in configured database backend
 - **Backup Strategy**: Automatic backups of processed data
 
 #### Cleanup Procedures
 ```python
 # Configure retention in .env
-ETL_DATA_RETENTION_DAYS=90  # Keep data for 90 days
+DATA_RETENTION_DAYS=90  # Keep data for 90 days
 ```
 
 ## API Usage
@@ -252,357 +397,189 @@ GET /api/health
   "status": "healthy",
   "database": "connected",
   "record_count": 1500,
+  "timestamp": "2023-01-01T12:00:00Z",
+  "version": "2.0.0"
+}
+```
+
+#### Key Performance Indicators
+```bash
+GET /api/kpis?date=2023-01-01
+```
+**Parameters:**
+- `date`: Optional date filter (YYYY-MM-DD format)
+
+**Response:**
+```json
+{
+  "avg_temp": 45.2,
+  "avg_pressure": 1005.3,
+  "alert_count": 3,
+  "uptime_hours": 24,
+  "total_records": 100,
+  "date_filter": "2023-01-01",
   "timestamp": "2023-01-01T12:00:00Z"
 }
 ```
 
-#### Latest Data
+#### Trend Data
 ```bash
-GET /api/latest-data?limit=100
-```
-**Parameters:**
-- `limit`: Number of records to return (default: 100)
-
-**Response:**
-```json
-{
-  "success": true,
-  "data": [
-    {
-      "timestamp": "2023-01-01T12:00:00Z",
-      "sensor_id": "SENSOR_001",
-      "temperature": 22.5,
-      "humidity": 65.2,
-      "pressure": 1013.25,
-      "battery_level": 85.0,
-      "signal_strength": 92.5
-    }
-  ]
-}
-```
-
-#### Sensor Summary
-```bash
-GET /api/sensor-summary
+GET /api/trends?date=2023-01-01
 ```
 **Response:**
 ```json
 {
-  "success": true,
-  "data": {
-    "total_records": 1500,
-    "total_sensors": 10,
-    "earliest_timestamp": "2023-01-01T00:00:00Z",
-    "latest_timestamp": "2023-01-01T12:00:00Z",
-    "sensor_stats": [
-      {
-        "sensor_id": "SENSOR_001",
-        "record_count": 150,
-        "avg_temperature": 22.5,
-        "avg_humidity": 65.2,
-        "avg_pressure": 1013.25,
-        "avg_battery": 85.0,
-        "avg_signal": 92.5
-      }
-    ]
-  }
+  "timestamps": ["2023-01-01 12:00:00", "2023-01-01 12:15:00"],
+  "temperatures": [22.5, 23.1],
+  "pressures": [1013.25, 1013.30],
+  "uptime_hours": [24, 24],
+  "date_filter": "2023-01-01",
+  "record_count": 2
 }
 ```
 
-#### Time Series Data
+#### Data Download
 ```bash
-GET /api/time-series?sensor_id=SENSOR_001&hours=24
+GET /api/download?date=2023-01-01
 ```
-**Parameters:**
-- `sensor_id`: Specific sensor ID (optional)
-- `hours`: Time range in hours (default: 24)
+**Response:** CSV file download
 
-**Response:**
-```json
-{
-  "success": true,
-  "data": {
-    "timestamps": ["2023-01-01T00:00:00Z", "2023-01-01T01:00:00Z"],
-    "temperature": [22.5, 23.1],
-    "humidity": [65.2, 64.8],
-    "pressure": [1013.25, 1013.30],
-    "battery_level": [85.0, 84.8],
-    "signal_strength": [92.5, 92.3]
-  }
-}
-```
+#### WebSocket Real-time Updates
+```javascript
+// Connect to WebSocket
+const ws = new WebSocket('ws://localhost:8000/ws/data');
 
-#### Sensor List
-```bash
-GET /api/sensors
-```
-**Response:**
-```json
-{
-  "success": true,
-  "data": ["SENSOR_001", "SENSOR_002", "SENSOR_003"]
-}
+ws.onmessage = function(event) {
+    const data = JSON.parse(event.data);
+    console.log('Real-time update:', data);
+};
 ```
 
 ### API Authentication
 
-For production use, implement authentication:
+Currently, the API is open for development. For production use:
 
-```python
-# Add to dashboard/app.py
-from functools import wraps
-from flask import request, jsonify
-
-def require_api_key(f):
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        api_key = request.headers.get('X-API-Key')
-        if api_key != 'your-api-key':
-            return jsonify({'error': 'Invalid API key'}), 401
-        return f(*args, **kwargs)
-    return decorated_function
-
-@app.route('/api/protected-endpoint')
-@require_api_key
-def protected_endpoint():
-    return jsonify({'data': 'protected'})
-```
-
-### API Rate Limiting
-
-Configure rate limiting in your environment:
-
-```bash
-# .env file
-API_RATE_LIMIT=100
-API_RATE_LIMIT_WINDOW=3600
-```
+1. **Add Authentication Middleware**
+2. **Configure API Keys**
+3. **Implement Rate Limiting**
 
 ## Advanced Features
 
-### Custom Data Sources
+### TimescaleDB Hypertables
 
-#### Adding New Extractors
+When using TimescaleDB, the system automatically creates hypertables for optimal time-series performance:
 
-Extend the ETL pipeline to support new data sources:
+```sql
+-- Automatic hypertable creation
+SELECT create_hypertable('sensor_data', 'timestamp');
 
-```python
-class CustomDataExtractor:
-    def extract_from_mqtt(self, broker_url: str, topic: str) -> pd.DataFrame:
-        """Extract data from MQTT broker."""
-        import paho.mqtt.client as mqtt
-        
-        data = []
-        def on_message(client, userdata, msg):
-            data.append(json.loads(msg.payload))
-        
-        client = mqtt.Client()
-        client.on_message = on_message
-        client.connect(broker_url)
-        client.subscribe(topic)
-        client.loop_start()
-        
-        return pd.DataFrame(data)
-
-    def extract_from_websocket(self, ws_url: str) -> pd.DataFrame:
-        """Extract data from WebSocket."""
-        import websocket
-        
-        data = []
-        def on_message(ws, message):
-            data.append(json.loads(message))
-        
-        ws = websocket.WebSocketApp(ws_url, on_message=on_message)
-        ws.run_forever()
-        
-        return pd.DataFrame(data)
+-- Time-series queries
+SELECT time_bucket('1 hour', timestamp) as hour,
+       avg(temperature) as avg_temp
+FROM sensor_data
+WHERE timestamp > now() - interval '24 hours'
+GROUP BY hour
+ORDER BY hour;
 ```
 
-#### Custom Transformations
+### Performance Optimization
 
-Add custom data transformations:
+#### Database-Specific Optimizations
+
+**SQLite:**
+- File-based storage
+- Suitable for development
+- Limited concurrency
+
+**PostgreSQL:**
+- Connection pooling
+- Index optimization
+- Query optimization
+
+**TimescaleDB:**
+- Automatic partitioning
+- Time-series functions
+- Compression
+
+#### Caching Strategies
 
 ```python
-def custom_transform(self, df: pd.DataFrame) -> pd.DataFrame:
-    """Apply custom transformations."""
-    # Add rolling averages
-    df['temp_rolling_avg'] = df['temperature'].rolling(window=10).mean()
-    
-    # Add seasonal decomposition
-    from statsmodels.tsa.seasonal import seasonal_decompose
-    decomposition = seasonal_decompose(df['temperature'], period=24)
-    df['temp_trend'] = decomposition.trend
-    df['temp_seasonal'] = decomposition.seasonal
-    
-    return df
+# Configure caching in .env
+CACHE_TTL=300  # 5 minutes
+REDIS_URL=redis://localhost:6379
 ```
 
-### Machine Learning Integration
+### Monitoring and Alerts
 
-#### Anomaly Detection
+#### Health Monitoring
+```bash
+# Health check endpoint
+curl http://localhost:8000/api/health
 
-Implement anomaly detection for sensor data:
-
-```python
-from sklearn.ensemble import IsolationForest
-
-class AnomalyDetector:
-    def __init__(self):
-        self.model = IsolationForest(contamination=0.1)
-    
-    def detect_anomalies(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Detect anomalies in sensor data."""
-        features = df[['temperature', 'humidity', 'pressure']].values
-        anomalies = self.model.fit_predict(features)
-        
-        df['is_anomaly'] = anomalies == -1
-        return df
+# Expected response
+{
+  "status": "healthy",
+  "database": "connected",
+  "record_count": 1500
+}
 ```
 
-#### Predictive Analytics
-
-Add predictive capabilities:
-
+#### Alert Configuration
 ```python
-from sklearn.linear_model import LinearRegression
-
-class PredictiveAnalytics:
-    def __init__(self):
-        self.model = LinearRegression()
-    
-    def predict_temperature(self, df: pd.DataFrame, hours_ahead: int = 24) -> pd.DataFrame:
-        """Predict temperature for next N hours."""
-        # Prepare features
-        df['hour'] = df['timestamp'].dt.hour
-        df['day_of_week'] = df['timestamp'].dt.dayofweek
-        
-        # Train model
-        X = df[['hour', 'day_of_week', 'humidity', 'pressure']].dropna()
-        y = df['temperature'].dropna()
-        
-        self.model.fit(X, y)
-        
-        # Make predictions
-        future_features = self._create_future_features(hours_ahead)
-        predictions = self.model.predict(future_features)
-        
-        return predictions
-```
-
-### Real-time Features
-
-#### WebSocket Integration
-
-Add real-time updates via WebSocket:
-
-```python
-from flask_socketio import SocketIO, emit
-
-socketio = SocketIO(app)
-
-@socketio.on('connect')
-def handle_connect():
-    print('Client connected')
-
-@socketio.on('request_data')
-def handle_data_request():
-    # Send latest data to client
-    data = get_latest_data()
-    emit('sensor_update', data)
-
-def broadcast_sensor_update(data):
-    """Broadcast sensor updates to all connected clients."""
-    socketio.emit('sensor_update', data)
-```
-
-#### Event-driven Processing
-
-Implement event-driven data processing:
-
-```python
-import asyncio
-from datetime import datetime
-
-class EventProcessor:
-    def __init__(self):
-        self.subscribers = []
-    
-    def subscribe(self, callback):
-        """Subscribe to sensor events."""
-        self.subscribers.append(callback)
-    
-    async def process_event(self, event_data):
-        """Process incoming sensor events."""
-        # Process the event
-        processed_data = await self.transform_event(event_data)
-        
-        # Notify subscribers
-        for callback in self.subscribers:
-            await callback(processed_data)
-    
-    async def transform_event(self, event_data):
-        """Transform raw event data."""
-        # Add timestamp if not present
-        if 'timestamp' not in event_data:
-            event_data['timestamp'] = datetime.now().isoformat()
-        
-        # Validate data
-        if not self.validate_event(event_data):
-            raise ValueError("Invalid event data")
-        
-        return event_data
+# Configure in .env
+TEMPERATURE_THRESHOLD_HIGH=80.0
+PRESSURE_THRESHOLD_HIGH=1100.0
+Z_SCORE_THRESHOLD_TEMPERATURE=2.0
+Z_SCORE_THRESHOLD_PRESSURE=2.5
 ```
 
 ## Troubleshooting
 
 ### Common Issues
 
-#### Dashboard Won't Start
+#### Database Connection Errors
 
-**Problem**: Dashboard fails to start with error messages.
+**Problem**: Cannot connect to database.
 
-**Solutions**:
-1. **Check Dependencies**
+**Solutions:**
+1. **Check DATABASE_URL**
    ```bash
-   pip install -r requirements.txt --force-reinstall
+   # Verify .env file
+   cat .env | grep DATABASE_URL
    ```
 
-2. **Verify Port Availability**
+2. **Test PostgreSQL Connection**
    ```bash
-   # Check if port 5000 is in use
-   netstat -an | grep 5000
-   
-   # Use different port
-   export DASHBOARD_PORT=5001
+   # Test connection
+   psql postgresql://user:password@localhost:5432/sensor_db
    ```
 
-3. **Check Database**
+3. **Check Database Status**
    ```bash
-   # Ensure data directory exists
-   mkdir -p data
+   # PostgreSQL
+   sudo systemctl status postgresql
    
-   # Check database file
+   # SQLite
    ls -la data/processed.db
    ```
 
-#### No Data Displayed
+#### Data Loading Issues
 
-**Problem**: Dashboard loads but shows no data.
+**Problem**: No data appears in dashboard.
 
-**Solutions**:
-1. **Check Data Files**
-   ```bash
-   # Verify data files exist
-   ls -la data/*.csv
-   ls -la data/*.db
-   ```
-
-2. **Run ETL Pipeline**
+**Solutions:**
+1. **Run ETL Pipeline**
    ```bash
    python pipeline/etl_pipeline.py
    ```
 
-3. **Check Database Content**
+2. **Check Data Files**
+   ```bash
+   ls -la data/
+   head -5 data/simulated_raw.csv
+   ```
+
+3. **Verify Database Content**
    ```python
    import sqlite3
    conn = sqlite3.connect('data/processed.db')
@@ -616,7 +593,7 @@ class EventProcessor:
 
 **Problem**: Charts remain static and don't refresh.
 
-**Solutions**:
+**Solutions:**
 1. **Check Auto-refresh Settings**
    - Verify `DASHBOARD_REFRESH_INTERVAL` in .env
    - Check browser console for JavaScript errors
@@ -627,20 +604,20 @@ class EventProcessor:
 
 3. **Check API Endpoints**
    ```bash
-   curl http://localhost:5000/api/health
-   curl http://localhost:5000/api/latest-data
+   curl http://localhost:8000/api/health
+   curl http://localhost:8000/api/kpis
    ```
 
 #### Performance Issues
 
 **Problem**: Dashboard is slow or unresponsive.
 
-**Solutions**:
+**Solutions:**
 1. **Optimize Database**
    ```sql
    -- Add indexes for better performance
    CREATE INDEX idx_timestamp ON sensor_data (timestamp);
-   CREATE INDEX idx_sensor_id ON sensor_data (sensor_id);
+   CREATE INDEX idx_temperature ON sensor_data (temperature);
    ```
 
 2. **Reduce Data Volume**
@@ -663,7 +640,7 @@ Enable debug mode for detailed error information:
 ```bash
 export FLASK_DEBUG=True
 export LOG_LEVEL=DEBUG
-python dashboard/app.py
+python main.py
 ```
 
 ### Log Files
@@ -692,147 +669,70 @@ journalctl -u smart-sensor-dashboard -f
 
 2. **Data Validation**
    ```python
+   # Validate data before processing
    def validate_sensor_data(data):
-       """Validate sensor data before processing."""
-       required_fields = ['timestamp', 'sensor_id', 'temperature']
-       for field in required_fields:
-           if field not in data:
-               raise ValueError(f"Missing required field: {field}")
-       
-       # Check value ranges
-       if not (0 <= data['temperature'] <= 100):
-           raise ValueError("Temperature out of range")
+       assert data['temperature'].between(-50, 150)
+       assert data['pressure'].between(800, 1200)
    ```
 
-3. **Error Handling**
+3. **Performance Monitoring**
    ```python
-   try:
-       processed_data = etl.run_pipeline(input_file)
-   except FileNotFoundError:
-       logger.error("Input file not found")
-       # Handle gracefully
-   except Exception as e:
-       logger.error(f"ETL pipeline failed: {e}")
-       # Send alert
+   # Monitor query performance
+   import time
+   start_time = time.time()
+   # ... database query ...
+   print(f"Query took {time.time() - start_time:.2f} seconds")
    ```
 
-### Performance Optimization
+### Security
+
+1. **Environment Variables**
+   ```bash
+   # Never commit sensitive data
+   echo ".env" >> .gitignore
+   ```
+
+2. **Database Security**
+   ```sql
+   -- Use strong passwords
+   ALTER USER sensor_user PASSWORD 'strong_password_here';
+   
+   -- Limit connections
+   ALTER USER sensor_user CONNECTION LIMIT 10;
+   ```
+
+3. **API Security**
+   ```python
+   # Add authentication
+   from fastapi import Depends, HTTPException
+   from fastapi.security import HTTPBearer
+   ```
+
+### Performance
 
 1. **Database Optimization**
    ```sql
-   -- Use appropriate data types
-   CREATE TABLE sensor_data (
-       id INTEGER PRIMARY KEY,
-       timestamp DATETIME NOT NULL,
-       sensor_id TEXT NOT NULL,
-       temperature REAL,
-       humidity REAL,
-       pressure REAL
-   );
+   -- Regular maintenance
+   VACUUM ANALYZE sensor_data;
    
-   -- Add composite indexes
-   CREATE INDEX idx_sensor_time ON sensor_data (sensor_id, timestamp);
+   -- Monitor slow queries
+   SELECT query, mean_time FROM pg_stat_statements ORDER BY mean_time DESC;
    ```
 
 2. **Caching Strategy**
    ```python
    # Cache frequently accessed data
    @cache.memoize(timeout=300)
-   def get_sensor_summary():
-       return calculate_summary()
-   
-   # Cache API responses
-   @cache.cached(timeout=60)
-   def get_latest_data():
-       return fetch_latest_data()
+   def get_kpis(date=None):
+       # ... KPI calculation ...
    ```
 
-3. **Batch Processing**
+3. **Resource Management**
    ```python
-   def process_batch(data_batch, batch_size=1000):
-       """Process data in batches for better performance."""
-       for i in range(0, len(data_batch), batch_size):
-           batch = data_batch[i:i + batch_size]
-           process_single_batch(batch)
-   ```
-
-### Security
-
-1. **Input Validation**
-   ```python
-   from marshmallow import Schema, fields, validate
-   
-   class SensorDataSchema(Schema):
-       sensor_id = fields.Str(required=True, validate=validate.Length(min=1, max=50))
-       temperature = fields.Float(validate=validate.Range(min=-50, max=100))
-       humidity = fields.Float(validate=validate.Range(min=0, max=100))
-   ```
-
-2. **API Security**
-   ```python
-   # Rate limiting
-   from flask_limiter import Limiter
-   limiter = Limiter(app, key_func=get_remote_address)
-   
-   @app.route('/api/data')
-   @limiter.limit("100 per minute")
-   def get_data():
-       return jsonify(data)
-   ```
-
-3. **Environment Security**
-   ```bash
-   # Use environment variables for secrets
-   export SECRET_KEY=$(openssl rand -hex 32)
-   export DATABASE_PASSWORD=$(openssl rand -base64 32)
-   ```
-
-### Monitoring
-
-1. **Health Checks**
-   ```python
-   @app.route('/health')
-   def health_check():
-       return jsonify({
-           'status': 'healthy',
-           'timestamp': datetime.now().isoformat(),
-           'version': '1.0.0'
-       })
-   ```
-
-2. **Metrics Collection**
-   ```python
-   from prometheus_client import Counter, Histogram
-   
-   # Define metrics
-   requests_total = Counter('http_requests_total', 'Total HTTP requests')
-   request_duration = Histogram('http_request_duration_seconds', 'HTTP request duration')
-   
-   # Track metrics
-   @app.before_request
-   def before_request():
-       requests_total.inc()
-   
-   @app.after_request
-   def after_request(response):
-       request_duration.observe(time.time() - start_time)
-       return response
-   ```
-
-3. **Logging**
-   ```python
-   import logging
-   from logging.handlers import RotatingFileHandler
-   
-   # Configure logging
-   handler = RotatingFileHandler('logs/app.log', maxBytes=10000, backupCount=3)
-   handler.setFormatter(logging.Formatter(
-       '%(asctime)s %(levelname)s: %(message)s [in %(pathname)s:%(lineno)d]'
-   ))
-   app.logger.addHandler(handler)
-   app.logger.setLevel(logging.INFO)
+   # Use connection pooling
+   engine = create_engine(DATABASE_URL, pool_size=20, max_overflow=30)
    ```
 
 ---
 
-This user manual provides comprehensive guidance for using the Smart Sensor Data Dashboard. For additional support, please refer to the project documentation or contact the development team. 
+**For additional support, see the main README.md file or create an issue on GitHub.** 

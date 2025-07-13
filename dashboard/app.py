@@ -14,7 +14,6 @@ from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
-import sqlite3
 import os
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
@@ -22,6 +21,9 @@ import logging
 from pydantic import BaseModel
 import asyncio
 import random
+from pipeline.db_utils import get_engine
+from pipeline.data_utils import load_sensor_data, compute_kpis, prepare_trend_data
+from sqlalchemy import text
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -53,7 +55,6 @@ if os.path.exists("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # Database configuration
-DB_PATH = "../data/processed.db"
 TABLE_NAME = "sensor_data"
 
 
@@ -76,267 +77,6 @@ class TrendResponse(BaseModel):
     uptime_hours: List[int]
     date_filter: Optional[str] = None
     record_count: int
-
-
-def get_db_connection() -> sqlite3.Connection:
-    """
-    Create and return a database connection.
-    
-    Returns:
-        SQLite database connection
-        
-    Raises:
-        HTTPException: If database connection fails
-    """
-    try:
-        if not os.path.exists(DB_PATH):
-            logger.error(f"Database file not found at {DB_PATH}")
-            raise HTTPException(
-                status_code=500,
-                detail=f"Database not found at {DB_PATH}. Please run the ETL pipeline first."
-            )
-        
-        conn = sqlite3.connect(DB_PATH, timeout=30.0)  # Add timeout for busy database
-        conn.row_factory = sqlite3.Row  # Enable column access by name
-        
-        # Test the connection
-        cursor = conn.cursor()
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
-        tables = cursor.fetchall()
-        cursor.close()
-        
-        if not tables:
-            logger.warning("Database exists but contains no tables")
-            
-        return conn
-        
-    except sqlite3.OperationalError as e:
-        logger.error(f"SQLite operational error: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Database operational error: {str(e)}"
-        )
-    except sqlite3.Error as e:
-        logger.error(f"SQLite error: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Database error: {str(e)}"
-        )
-    except Exception as e:
-        logger.error(f"Unexpected database connection error: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Database connection failed: {str(e)}"
-        )
-
-
-def validate_date_format(date_str: str) -> bool:
-    """
-    Validate date string format (YYYY-MM-DD).
-    
-    Args:
-        date_str: Date string to validate
-        
-    Returns:
-        True if valid format, False otherwise
-    """
-    try:
-        datetime.strptime(date_str, "%Y-%m-%d")
-        return True
-    except ValueError:
-        return False
-
-
-def load_data(date_filter: Optional[str] = None) -> pd.DataFrame:
-    """
-    Load sensor data from SQLite database with optional date filtering.
-    
-    Args:
-        date_filter: Optional date filter in YYYY-MM-DD format
-        
-    Returns:
-        DataFrame containing sensor data
-        
-    Raises:
-        HTTPException: If database query fails or date format is invalid
-    """
-    conn = None
-    try:
-        # Validate date filter if provided
-        if date_filter and not validate_date_format(date_filter):
-            logger.warning(f"Invalid date format provided: {date_filter}")
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid date format: {date_filter}. Use YYYY-MM-DD format."
-            )
-        
-        conn = get_db_connection()
-        
-        # Check if table exists
-        cursor = conn.cursor()
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (TABLE_NAME,))
-        if not cursor.fetchone():
-            cursor.close()
-            conn.close()
-            logger.error(f"Table {TABLE_NAME} not found in database")
-            raise HTTPException(
-                status_code=500,
-                detail=f"Table {TABLE_NAME} not found. Please run the ETL pipeline first."
-            )
-        cursor.close()
-        
-        # Build query with optional date filter
-        if date_filter:
-            query = f"""
-                SELECT * FROM {TABLE_NAME}
-                WHERE DATE(timestamp) = ?
-                ORDER BY timestamp
-            """
-            df = pd.read_sql_query(query, conn, params=[date_filter])
-        else:
-            query = f"SELECT * FROM {TABLE_NAME} ORDER BY timestamp"
-            df = pd.read_sql_query(query, conn)
-        
-        if df.empty:
-            if date_filter:
-                logger.warning(f"No data found for date: {date_filter}")
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"No data found for date: {date_filter}"
-                )
-            else:
-                logger.error("No data found in database")
-                raise HTTPException(
-                    status_code=404,
-                    detail="No data found in database. Please run the ETL pipeline first."
-                )
-        
-        logger.info(f"Loaded {len(df)} records from database")
-        return df
-        
-    except HTTPException:
-        raise
-    except sqlite3.Error as e:
-        logger.error(f"SQLite error in load_data: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Database query failed: {str(e)}"
-        )
-    except Exception as e:
-        logger.error(f"Unexpected error loading data: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to load data: {str(e)}"
-        )
-    finally:
-        if conn:
-            try:
-                conn.close()
-            except Exception as e:
-                logger.error(f"Error closing database connection: {e}")
-
-
-def compute_kpis(df: pd.DataFrame) -> Dict[str, Any]:
-    """
-    Compute Key Performance Indicators from sensor data.
-    
-    Args:
-        df: DataFrame containing sensor data
-        
-    Returns:
-        Dictionary containing computed KPIs
-    """
-    try:
-        # Basic statistics
-        avg_temp = df['temperature'].mean() if 'temperature' in df.columns else 0.0
-        avg_pressure = df['pressure'].mean() if 'pressure' in df.columns else 0.0
-        total_records = len(df)
-        
-        # Alert counting
-        alert_count = 0
-        if 'temperature_alert' in df.columns:
-            alert_count += (df['temperature_alert'] == 'red').sum()
-        if 'pressure_alert' in df.columns:
-            alert_count += (df['pressure_alert'] == 'red').sum()
-        
-        # Uptime calculation
-        uptime_hours = df['uptime'].max() if 'uptime' in df.columns else 0
-        
-        # Data quality metrics
-        data_quality_score = 100.0  # Can be enhanced with more sophisticated metrics
-        
-        kpis = {
-            'avg_temp': round(avg_temp, 2),
-            'avg_pressure': round(avg_pressure, 2),
-            'alert_count': int(alert_count),
-            'uptime_hours': int(uptime_hours),
-            'total_records': total_records,
-            'data_quality_score': data_quality_score,
-            'temperature_range': {
-                'min': round(df['temperature'].min(), 2) if 'temperature' in df.columns else 0,
-                'max': round(df['temperature'].max(), 2) if 'temperature' in df.columns else 0
-            },
-            'pressure_range': {
-                'min': round(df['pressure'].min(), 2) if 'pressure' in df.columns else 0,
-                'max': round(df['pressure'].max(), 2) if 'pressure' in df.columns else 0
-            }
-        }
-        
-        logger.info(f"KPIs computed: avg_temp={kpis['avg_temp']}°C, "
-                   f"alerts={kpis['alert_count']}, uptime={kpis['uptime_hours']}h")
-        
-        return kpis
-        
-    except Exception as e:
-        logger.error(f"Error computing KPIs: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to compute KPIs: {str(e)}"
-        )
-
-
-def prepare_trend_data(df: pd.DataFrame) -> Dict[str, Any]:
-    """
-    Prepare trend data for visualization.
-    
-    Args:
-        df: DataFrame containing sensor data
-        
-    Returns:
-        Dictionary containing trend data lists and metadata
-    """
-    try:
-        # Handle timestamp column - convert to datetime if it's a string
-        if 'timestamp' in df.columns:
-            if df['timestamp'].dtype == 'object':  # String type
-                # Convert string timestamps to datetime
-                df['timestamp'] = pd.to_datetime(df['timestamp'])
-            timestamps = df['timestamp'].dt.strftime('%Y-%m-%d %H:%M:%S').tolist()
-        else:
-            timestamps = []
-        
-        # Extract numeric data
-        temperatures = df['temperature'].round(2).tolist() if 'temperature' in df.columns else []
-        pressures = df['pressure'].round(2).tolist() if 'pressure' in df.columns else []
-        uptime_hours = df['uptime'].tolist() if 'uptime' in df.columns else []
-        
-        trend_data = {
-            'timestamps': timestamps,
-            'temperatures': temperatures,
-            'pressures': pressures,
-            'uptime_hours': uptime_hours,
-            'record_count': len(df)
-        }
-        
-        logger.info(f"Trend data prepared: {len(timestamps)} data points")
-        return trend_data
-        
-    except Exception as e:
-        logger.error(f"Error preparing trend data: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to prepare trend data: {str(e)}"
-        )
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -370,7 +110,7 @@ async def get_kpis(date: Optional[str] = Query(None, description="Date filter in
     """
     try:
         # Load data with optional date filter
-        df = load_data(date)
+        df = load_sensor_data(TABLE_NAME, date)
         
         # Compute KPIs
         kpis = compute_kpis(df)
@@ -414,7 +154,7 @@ async def get_trends(date: Optional[str] = Query(None, description="Date filter 
     """
     try:
         # Load data with optional date filter
-        df = load_data(date)
+        df = load_sensor_data(TABLE_NAME, date)
         
         # Prepare trend data
         trend_data = prepare_trend_data(df)
@@ -451,11 +191,11 @@ async def health_check():
     """
     try:
         # Check database connectivity
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute(f"SELECT COUNT(*) FROM {TABLE_NAME}")
-        record_count = cursor.fetchone()[0]
-        conn.close()
+        engine = get_engine()
+        with engine.connect() as conn:
+            result = conn.execute(text(f"SELECT COUNT(*) FROM {TABLE_NAME}"))
+            fetch_result = result.fetchone()
+            record_count = fetch_result[0] if fetch_result is not None else 0
         
         return {
             "status": "healthy",
@@ -478,24 +218,33 @@ async def health_check():
 @app.websocket("/ws/data")
 async def websocket_data(websocket: WebSocket):
     """
-    WebSocket endpoint for real-time sensor data streaming.
-    Simulates new sensor readings every 5 seconds and sends them to the client.
+    WebSocket endpoint for real-time data updates.
+    
+    Args:
+        websocket: WebSocket connection
     """
     await websocket.accept()
     try:
         while True:
-            # Simulate new sensor data (could also pull from DB or cache)
-            data = {
-                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "temperature": round(random.uniform(20, 100), 2),
-                "pressure": round(random.uniform(900, 1100), 2)
-            }
-            await websocket.send_json(data)
-            await asyncio.sleep(5)  # Send update every 5 seconds
+            # Send real-time data every 30 seconds
+            await asyncio.sleep(30)
+            
+            # Get latest data
+            df = load_sensor_data(TABLE_NAME)
+            kpis = compute_kpis(df)
+            
+            # Send data to client
+            await websocket.send_json({
+                "type": "update",
+                "kpis": kpis,
+                "timestamp": datetime.now().isoformat()
+            })
+            
     except WebSocketDisconnect:
         logger.info("WebSocket client disconnected")
     except Exception as e:
         logger.error(f"WebSocket error: {e}")
+        await websocket.close()
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
@@ -524,7 +273,7 @@ async def dashboard(request: Request, date: Optional[str] = Query(None, descript
             )
         
         # Load data with optional date filter
-        df = load_data(date)
+        df = load_sensor_data(TABLE_NAME, date)
         
         # Compute KPIs
         kpis = compute_kpis(df)
@@ -564,7 +313,7 @@ async def get_summary():
     """
     try:
         # Load all data
-        df = load_data()
+        df = load_sensor_data(TABLE_NAME)
         
         # Compute KPIs
         kpis = compute_kpis(df)
@@ -597,35 +346,44 @@ async def get_summary():
         )
 
 
-# Error handlers
 @app.exception_handler(404)
 async def not_found_handler(request: Request, exc: HTTPException):
-    """Handle 404 errors."""
-    return templates.TemplateResponse(
-        "error.html",
-        {
-            "request": request,
-            "status_code": 404,
-            "message": "Page not found",
-            "details": "The requested resource was not found on this server."
-        },
-        status_code=404
-    )
+    """
+    Handle 404 errors.
+    
+    Args:
+        request: FastAPI request object
+        exc: HTTPException
+        
+    Returns:
+        HTML response with error page
+    """
+    return templates.TemplateResponse("error.html", {
+        "request": request,
+        "error_code": 404,
+        "error_message": "Page not found",
+        "error_description": "The requested page could not be found."
+    })
 
 
 @app.exception_handler(500)
 async def internal_error_handler(request: Request, exc: HTTPException):
-    """Handle 500 errors."""
-    return templates.TemplateResponse(
-        "error.html",
-        {
-            "request": request,
-            "status_code": 500,
-            "message": "Internal server error",
-            "details": "An unexpected error occurred. Please try again later."
-        },
-        status_code=500
-    )
+    """
+    Handle 500 errors.
+    
+    Args:
+        request: FastAPI request object
+        exc: HTTPException
+        
+    Returns:
+        HTML response with error page
+    """
+    return templates.TemplateResponse("error.html", {
+        "request": request,
+        "error_code": 500,
+        "error_message": "Internal server error",
+        "error_description": "An unexpected error occurred. Please try again later."
+    })
 
 
 if __name__ == "__main__":

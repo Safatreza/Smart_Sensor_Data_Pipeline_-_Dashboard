@@ -1,6 +1,6 @@
 # Smart Sensor Data Pipeline & Dashboard
 
-A comprehensive ETL pipeline and interactive dashboard system designed for industrial sensor data monitoring and analysis. This project provides scalable data processing, real-time visualization, and business-focused analytics for engineering operations.
+A comprehensive ETL pipeline and interactive dashboard system designed for industrial sensor data monitoring and analysis. This project provides scalable data processing, real-time visualization, and business-focused analytics for engineering operations with support for both SQLite and PostgreSQL/TimescaleDB backends.
 
 ## 📋 Table of Contents
 
@@ -8,6 +8,7 @@ A comprehensive ETL pipeline and interactive dashboard system designed for indus
 - [✨ Features](#-features)
 - [🚀 Quick Start](#-quick-start)
 - [🛠️ Full Setup](#️-full-setup)
+- [🗄️ Database Configuration](#️-database-configuration)
 - [🐳 Docker Deployment](#-docker-deployment)
 - [📁 Project Structure](#-project-structure)
 - [📸 Screenshots](#-screenshots)
@@ -26,6 +27,7 @@ This solution aligns perfectly with **Crewmeister's** needs for:
 - **SQL-based analytics** with real-time insights
 - **Business-focused visualizations** for decision making
 - **Production-ready architecture** for real-world sensor data
+- **Flexible database backends** supporting both SQLite and PostgreSQL/TimescaleDB
 
 ## ✨ Features
 
@@ -33,7 +35,8 @@ This solution aligns perfectly with **Crewmeister's** needs for:
 - **Modular data processing** with extraction, transformation, and loading stages
 - **Anomaly detection** using Z-score analysis for temperature monitoring
 - **Data quality checks** and outlier removal
-- **SQLite database storage** with optimized schema
+- **Multi-database support** with SQLite and PostgreSQL/TimescaleDB
+- **TimescaleDB hypertables** for time-series optimization
 - **Configurable processing** via environment variables
 
 ### 📊 **FastAPI Dashboard**
@@ -42,6 +45,14 @@ This solution aligns perfectly with **Crewmeister's** needs for:
 - **Date filtering** for historical data analysis
 - **RESTful API endpoints** for data access and integration
 - **Responsive design** for desktop and mobile access
+- **WebSocket support** for real-time updates
+
+### 🗄️ **Database Support**
+- **SQLite** (default) - Lightweight, file-based database
+- **PostgreSQL** - Production-ready relational database
+- **TimescaleDB** - Time-series optimized PostgreSQL extension
+- **Automatic schema management** and indexing
+- **Connection pooling** and optimized queries
 
 ### 🚀 **Dependency-Free Demo**
 - **Zero-dependency demo script** requiring only Python 3.8+
@@ -84,6 +95,7 @@ The demo will:
 ### Prerequisites
 - **Python 3.8** or higher
 - **Git**
+- **PostgreSQL** (optional, for production use)
 
 ### Installation Steps
 
@@ -95,6 +107,10 @@ The demo will:
 
 2. **Install dependencies**
    ```bash
+   # For basic functionality
+   pip install -r requirements_simple.txt
+   
+   # For full features
    pip install -r requirements.txt
    ```
 
@@ -103,7 +119,7 @@ The demo will:
    # Copy the environment template
    cp env.example .env
    
-   # Edit .env file with your settings (optional)
+   # Edit .env file with your settings
    nano .env
    ```
 
@@ -114,6 +130,10 @@ The demo will:
 
 5. **Launch the dashboard**
    ```bash
+   # Option 1: Use the main application
+   python main.py
+   
+   # Option 2: Use the dashboard app directly
    python dashboard/app.py
    ```
 
@@ -121,6 +141,69 @@ The demo will:
    - 🌐 **Dashboard**: `http://localhost:8000/dashboard`
    - 📚 **API Docs**: `http://localhost:8000/docs`
    - 🔍 **Health Check**: `http://localhost:8000/api/health`
+
+## 🗄️ Database Configuration
+
+The system supports multiple database backends configured via the `DATABASE_URL` environment variable:
+
+### SQLite (Default)
+```bash
+# .env file
+DATABASE_URL=sqlite:///data/processed.db
+```
+- **Pros**: No setup required, file-based, perfect for development
+- **Cons**: Limited concurrency, not suitable for high-volume production
+
+### PostgreSQL
+```bash
+# .env file
+DATABASE_URL=postgresql://user:password@localhost:5432/sensor_db
+```
+- **Pros**: Production-ready, excellent concurrency, ACID compliance
+- **Cons**: Requires PostgreSQL installation and setup
+
+### TimescaleDB (Recommended for Time-Series)
+```bash
+# .env file
+DATABASE_URL=postgresql://user:password@localhost:5432/sensor_db
+```
+- **Pros**: Optimized for time-series data, automatic partitioning, hypertables
+- **Cons**: Requires TimescaleDB extension installation
+
+### Setup PostgreSQL/TimescaleDB
+
+1. **Install PostgreSQL**
+   ```bash
+   # Ubuntu/Debian
+   sudo apt-get install postgresql postgresql-contrib
+   
+   # macOS
+   brew install postgresql
+   
+   # Windows
+   # Download from https://www.postgresql.org/download/windows/
+   ```
+
+2. **Install TimescaleDB** (optional)
+   ```bash
+   # Ubuntu/Debian
+   sudo apt-get install timescaledb-postgresql-14
+   
+   # macOS
+   brew install timescaledb
+   ```
+
+3. **Create Database**
+   ```sql
+   CREATE DATABASE sensor_db;
+   CREATE USER sensor_user WITH PASSWORD 'your_password';
+   GRANT ALL PRIVILEGES ON DATABASE sensor_db TO sensor_user;
+   ```
+
+4. **Enable TimescaleDB** (if using)
+   ```sql
+   CREATE EXTENSION IF NOT EXISTS timescaledb;
+   ```
 
 ## 🐳 Docker Deployment
 
@@ -142,7 +225,9 @@ docker-compose up -d
 ```
 Smart_Sensor_Data_Pipeline_&_Dashboard/
 ├── 📁 pipeline/
-│   └── etl_pipeline.py          # ETL data processing pipeline
+│   ├── etl_pipeline.py          # ETL data processing pipeline
+│   ├── db_utils.py              # Database abstraction layer
+│   └── data_utils.py            # Shared data processing utilities
 ├── 📁 dashboard/
 │   └── app.py                   # FastAPI web application
 ├── 📁 data/
@@ -156,17 +241,21 @@ Smart_Sensor_Data_Pipeline_&_Dashboard/
 │   └── test_etl.py            # Unit and integration tests
 ├── 📁 .github/workflows/
 │   └── ci.yml                 # CI/CD pipeline configuration
-├── requirements.txt           # Python dependencies
+├── requirements.txt           # Full Python dependencies
+├── requirements_simple.txt    # Minimal dependencies
 ├── env.example               # Environment variables template
 ├── .gitignore               # Git ignore rules
 └── README.md                # This file
 ```
 
 ### 📋 **pipeline/**
-Contains the ETL pipeline for data processing:
+Contains the ETL pipeline and utilities:
+- **`etl_pipeline.py`**: Main ETL processing pipeline
+- **`db_utils.py`**: Database abstraction layer (SQLAlchemy)
+- **`data_utils.py`**: Shared data processing functions
 - **Data extraction** from CSV files
 - **Transformation** with cleaning and anomaly detection
-- **Loading** into SQLite database
+- **Loading** into configured database backend
 - **KPI calculation** and metadata generation
 
 ### 📊 **dashboard/**
@@ -175,6 +264,7 @@ FastAPI web application with:
 - **Interactive dashboard** with Chart.js
 - **Real-time data visualization**
 - **Date filtering** and trend analysis
+- **WebSocket support** for live updates
 
 ### 📁 **data/**
 Sample sensor data files:
@@ -219,10 +309,23 @@ HTML templates for the web interface:
 - `GET /api/trends` - Time series data for charts
 - `GET /api/health` - System health check
 - `GET /api/summary` - Comprehensive data summary
+- `GET /api/download` - Download data as CSV
+- `WS /ws/data` - WebSocket for real-time updates
 
 ### Query Parameters
 - `date=YYYY-MM-DD` - Filter data by specific date
-- `download=csv` - Download data as CSV file
+
+### Response Models
+```json
+{
+  "avg_temp": 45.2,
+  "avg_pressure": 1005.3,
+  "alert_count": 3,
+  "uptime_hours": 24,
+  "total_records": 100,
+  "timestamp": "2024-01-01T12:00:00Z"
+}
+```
 
 ## 🧪 Testing
 
@@ -244,47 +347,49 @@ pytest tests/test_etl.py
 ### Updating Sensor Data
 1. Replace `data/simulated_raw.csv` with new sensor data
 2. Run the ETL pipeline: `python pipeline/etl_pipeline.py`
-3. Restart the dashboard: `python dashboard/app.py`
+3. Restart the dashboard: `python main.py`
 
-### Extending the Pipeline
-1. Add new transformation functions in `pipeline/etl_pipeline.py`
-2. Update the database schema if needed
-3. Add corresponding API endpoints in `dashboard/app.py`
-4. Update the dashboard template in `templates/dashboard.html`
+### Database Migration
+1. Update `DATABASE_URL` in `.env` file
+2. Run the ETL pipeline to create new schema
+3. Verify data integrity with health check endpoint
 
-### Configuration Updates
-- Modify `.env` file for environment-specific settings
-- Update `requirements.txt` for new dependencies
-- Adjust anomaly detection thresholds in the ETL pipeline
+### Performance Optimization
+- **SQLite**: Suitable for development and small datasets
+- **PostgreSQL**: Recommended for production with moderate data volume
+- **TimescaleDB**: Best for high-volume time-series data
 
 ## 🤝 Contributing
 
-1. **Fork** the repository
-2. Create a feature branch: `git checkout -b feature-name`
-3. Make your changes and add tests
-4. Run the test suite: `pytest`
-5. Commit your changes: `git commit -am 'Add feature'`
-6. Push to the branch: `git push origin feature-name`
-7. Submit a pull request
+1. Fork the repository
+2. Create a feature branch: `git checkout -b feature/new-feature`
+3. Commit your changes: `git commit -am 'Add new feature'`
+4. Push to the branch: `git push origin feature/new-feature`
+5. Submit a pull request
+
+### Development Guidelines
+- Follow PEP 8 style guidelines
+- Add tests for new features
+- Update documentation for API changes
+- Use type hints for function parameters
 
 ## 📄 License
 
-This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ## 🙏 Acknowledgments
 
-- **Chart.js** for interactive data visualization
-- **FastAPI** for modern web API development
-- **Pandas** for data processing and analysis
-- **SQLite** for lightweight database storage
+- **FastAPI** for the excellent web framework
+- **SQLAlchemy** for database abstraction
+- **Chart.js** for interactive visualizations
+- **Pandas** for data processing capabilities
 
 ## 📞 Support
 
-For questions, issues, or contributions:
-- 🐛 Create an issue on GitHub
-- 📧 Contact the development team
-- 📖 Check the documentation in the `docs/` folder
+- **Documentation**: [USER_MANUAL.md](USER_MANUAL.md)
+- **Issues**: [GitHub Issues](https://github.com/your-username/smart-sensor-dashboard/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/your-username/smart-sensor-dashboard/discussions)
 
 ---
 
-**Built with ❤️ for industrial sensor data monitoring and analysis** 
+**Built with ❤️ for industrial data analytics** 

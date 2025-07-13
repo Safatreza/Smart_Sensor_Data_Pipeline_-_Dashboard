@@ -24,7 +24,6 @@ import json
 import logging
 import os
 import random
-import sqlite3
 import time
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
@@ -36,6 +35,10 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 import uvicorn
+
+from pipeline.db_utils import get_engine
+from pipeline.data_utils import load_sensor_data, compute_kpis, prepare_trend_data
+from sqlalchemy import text
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -69,184 +72,64 @@ class TrendResponse(BaseModel):
     record_count: int
 
 # Database configuration
-DB_PATH = "sensor_data.db"
 TABLE_NAME = "sensor_readings"
 
 def init_database():
-    """Initialize the SQLite database with sample data."""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    # Create table if not exists
-    cursor.execute(f"""
-        CREATE TABLE IF NOT EXISTS {TABLE_NAME} (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp TEXT NOT NULL,
-            temperature REAL NOT NULL,
-            pressure REAL NOT NULL,
-            uptime INTEGER NOT NULL,
-            alert_level TEXT DEFAULT 'normal'
-        )
-    """)
-    
-    # Check if table is empty, if so populate with sample data
-    cursor.execute(f"SELECT COUNT(*) FROM {TABLE_NAME}")
-    count = cursor.fetchone()[0]
-    
-    if count == 0:
-        logger.info("Populating database with sample sensor data...")
-        
-        # Generate 100 sample records over the last 24 hours
-        base_time = datetime.now() - timedelta(hours=24)
-        sample_data = []
-        
-        for i in range(100):
-            timestamp = base_time + timedelta(minutes=i * 15)  # Every 15 minutes
-            temperature = random.uniform(20, 100)
-            pressure = random.uniform(900, 1100)
-            uptime = random.randint(1, 100)
-            alert_level = 'alert' if temperature > 90 or pressure > 1050 else 'normal'
+    """Initialize the database with sample data."""
+    engine = get_engine()
+    try:
+        with engine.connect() as conn:
+            # Create table if not exists
+            conn.execute(text(f"""
+                CREATE TABLE IF NOT EXISTS {TABLE_NAME} (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    temperature REAL NOT NULL,
+                    pressure REAL NOT NULL,
+                    uptime INTEGER NOT NULL,
+                    alert_level TEXT DEFAULT 'normal'
+                )
+            """))
             
-            sample_data.append((
-                timestamp.strftime('%Y-%m-%d %H:%M:%S'),
-                round(temperature, 2),
-                round(pressure, 2),
-                uptime,
-                alert_level
-            ))
-        
-        cursor.executemany(f"""
-            INSERT INTO {TABLE_NAME} (timestamp, temperature, pressure, uptime, alert_level)
-            VALUES (?, ?, ?, ?, ?)
-        """, sample_data)
-        
-        conn.commit()
-        logger.info(f"Added {len(sample_data)} sample records to database")
-    
-    conn.close()
-
-def get_db_connection():
-    """Get SQLite database connection."""
-    return sqlite3.connect(DB_PATH)
-
-def load_data(date_filter: Optional[str] = None) -> pd.DataFrame:
-    """Load sensor data from database with optional date filter."""
-    try:
-        conn = get_db_connection()
-        
-        if date_filter:
-            # Filter by specific date
-            query = f"""
-                SELECT timestamp, temperature, pressure, uptime, alert_level
-                FROM {TABLE_NAME}
-                WHERE DATE(timestamp) = ?
-                ORDER BY timestamp
-            """
-            df = pd.read_sql_query(query, conn, params=[date_filter])
-        else:
-            # Load all data
-            query = f"""
-                SELECT timestamp, temperature, pressure, uptime, alert_level
-                FROM {TABLE_NAME}
-                ORDER BY timestamp
-            """
-            df = pd.read_sql_query(query, conn)
-        
-        conn.close()
-        
-        if df.empty:
-            logger.warning("No data found in database")
-            empty_df = pd.DataFrame()
-            empty_df['timestamp'] = []
-            empty_df['temperature'] = []
-            empty_df['pressure'] = []
-            empty_df['uptime'] = []
-            empty_df['alert_level'] = []
-            return empty_df
-        
-        logger.info(f"Loaded {len(df)} records from database")
-        return df
-        
-    except Exception as e:
-        logger.error(f"Error loading data: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to load data: {str(e)}")
-
-def compute_kpis(df: pd.DataFrame) -> Dict[str, Any]:
-    """Compute Key Performance Indicators from sensor data."""
-    try:
-        if df.empty:
-            return {
-                'avg_temp': 0.0,
-                'avg_pressure': 0.0,
-                'alert_count': 0,
-                'uptime_hours': 0,
-                'total_records': 0
-            }
-        
-        # Calculate KPIs
-        avg_temp = df['temperature'].mean()
-        avg_pressure = df['pressure'].mean()
-        alert_count = len(df[df['alert_level'] == 'alert'])
-        uptime_hours = df['uptime'].sum()
-        total_records = len(df)
-        
-        kpis = {
-            'avg_temp': round(avg_temp, 2),
-            'avg_pressure': round(avg_pressure, 2),
-            'alert_count': alert_count,
-            'uptime_hours': uptime_hours,
-            'total_records': total_records
-        }
-        
-        logger.info(f"KPIs computed: avg_temp={kpis['avg_temp']}°C, alerts={kpis['alert_count']}, uptime={kpis['uptime_hours']}h")
-        return kpis
-        
-    except Exception as e:
-        logger.error(f"Error computing KPIs: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to compute KPIs: {str(e)}")
-
-def prepare_trend_data(df: pd.DataFrame) -> Dict[str, Any]:
-    """Prepare trend data for visualization."""
-    try:
-        if df.empty:
-            return {
-                'timestamps': [],
-                'temperatures': [],
-                'pressures': [],
-                'uptime_hours': [],
-                'record_count': 0
-            }
-        
-        # Handle timestamp column - ensure it's properly formatted
-        if 'timestamp' in df.columns:
-            # Convert timestamp strings to datetime if needed
-            if df['timestamp'].dtype == 'object':
-                df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
+            # Check if table is empty, if so populate with sample data
+            count_query = text(f"SELECT COUNT(*) FROM {TABLE_NAME}")
+            result = conn.execute(count_query).fetchone()
+            count = result[0] if result is not None else 0
             
-            # Format timestamps for display
-            timestamps = df['timestamp'].dt.strftime('%Y-%m-%d %H:%M:%S').fillna('Unknown').tolist()
-        else:
-            timestamps = []
-        
-        # Extract numeric data with error handling
-        temperatures = df['temperature'].round(2).fillna(0).tolist() if 'temperature' in df.columns else []
-        pressures = df['pressure'].round(2).fillna(0).tolist() if 'pressure' in df.columns else []
-        uptime_hours = df['uptime'].fillna(0).tolist() if 'uptime' in df.columns else []
-        
-        trend_data = {
-            'timestamps': timestamps,
-            'temperatures': temperatures,
-            'pressures': pressures,
-            'uptime_hours': uptime_hours,
-            'record_count': len(df)
-        }
-        
-        logger.info(f"Trend data prepared: {len(timestamps)} data points")
-        return trend_data
-        
+            if count == 0:
+                logger.info("Populating database with sample sensor data...")
+                
+                # Generate 100 sample records over the last 24 hours
+                base_time = datetime.now() - timedelta(hours=24)
+                sample_data = []
+                
+                for i in range(100):
+                    timestamp = base_time + timedelta(minutes=i * 15)  # Every 15 minutes
+                    temperature = random.uniform(20, 100)
+                    pressure = random.uniform(900, 1100)
+                    uptime = random.randint(1, 100)
+                    alert_level = 'alert' if temperature > 90 or pressure > 1050 else 'normal'
+                    
+                    sample_data.append({
+                        "timestamp": timestamp.strftime('%Y-%m-%d %H:%M:%S'),
+                        "temperature": round(temperature, 2),
+                        "pressure": round(pressure, 2),
+                        "uptime": uptime,
+                        "alert_level": alert_level
+                    })
+                
+                insert_query = text(f"""
+                    INSERT INTO {TABLE_NAME} (timestamp, temperature, pressure, uptime, alert_level)
+                    VALUES (:timestamp, :temperature, :pressure, :uptime, :alert_level)
+                """)
+                conn.execute(insert_query, sample_data)
+                conn.commit()
+                logger.info(f"Added {len(sample_data)} sample records to database")
+            else:
+                logger.info(f"Database already contains {count} records. Skipping sample data population.")
     except Exception as e:
-        logger.error(f"Error preparing trend data: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to prepare trend data: {str(e)}")
+        logger.error(f"Error initializing database: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to initialize database: {str(e)}")
 
 # HTML template for the dashboard
 DASHBOARD_HTML = """
@@ -506,7 +389,6 @@ DASHBOARD_HTML = """
 </html>
 """
 
-# API Routes
 @app.get("/", response_class=HTMLResponse)
 async def root():
     """Root endpoint - redirect to dashboard."""
@@ -514,14 +396,14 @@ async def root():
 
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard():
-    """Render the main dashboard page."""
+    """Render the dashboard HTML."""
     return HTMLResponse(content=DASHBOARD_HTML)
 
 @app.get("/api/kpis", response_model=KPIResponse)
 async def get_kpis(date: Optional[str] = Query(None, description="Date filter in YYYY-MM-DD format")):
     """Get Key Performance Indicators for sensor data."""
     try:
-        df = load_data(date)
+        df = load_sensor_data(TABLE_NAME, date)
         kpis = compute_kpis(df)
         
         response = KPIResponse(
@@ -544,7 +426,7 @@ async def get_kpis(date: Optional[str] = Query(None, description="Date filter in
 async def get_trends(date: Optional[str] = Query(None, description="Date filter in YYYY-MM-DD format")):
     """Get trend data for sensor visualization."""
     try:
-        df = load_data(date)
+        df = load_sensor_data(TABLE_NAME, date)
         trend_data = prepare_trend_data(df)
         
         response = TrendResponse(
@@ -566,11 +448,11 @@ async def get_trends(date: Optional[str] = Query(None, description="Date filter 
 async def health_check():
     """Health check endpoint for monitoring."""
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute(f"SELECT COUNT(*) FROM {TABLE_NAME}")
-        record_count = cursor.fetchone()[0]
-        conn.close()
+        engine = get_engine()
+        with engine.connect() as conn:
+            count_query = text(f"SELECT COUNT(*) FROM {TABLE_NAME}")
+            result = conn.execute(count_query).fetchone()
+            record_count = result[0] if result is not None else 0
         
         return {
             "status": "healthy",
@@ -593,12 +475,9 @@ async def health_check():
 async def download_csv(date: Optional[str] = Query(None, description="Date filter in YYYY-MM-DD format")):
     """Download sensor data as CSV."""
     try:
-        df = load_data(date)
+        df = load_sensor_data(TABLE_NAME, date)
         
-        if df.empty:
-            raise HTTPException(status_code=404, detail="No data available for download")
-        
-        # Create CSV content
+        # Convert DataFrame to CSV
         csv_content = df.to_csv(index=False)
         
         from fastapi.responses import Response
@@ -609,27 +488,34 @@ async def download_csv(date: Optional[str] = Query(None, description="Date filte
         )
         
     except Exception as e:
-        logger.error(f"Error in download endpoint: {e}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        logger.error(f"Error downloading CSV: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to download CSV: {str(e)}")
 
 @app.websocket("/ws/data")
 async def websocket_data(websocket: WebSocket):
-    """WebSocket endpoint for real-time sensor data streaming."""
+    """WebSocket endpoint for real-time data updates."""
     await websocket.accept()
     try:
         while True:
-            # Simulate new sensor data
-            data = {
-                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "temperature": round(random.uniform(20, 100), 2),
-                "pressure": round(random.uniform(900, 1100), 2)
-            }
-            await websocket.send_json(data)
-            await asyncio.sleep(5)  # Send update every 5 seconds
+            # Send real-time data every 30 seconds
+            await asyncio.sleep(30)
+            
+            # Get latest data
+            df = load_sensor_data(TABLE_NAME)
+            kpis = compute_kpis(df)
+            
+            # Send data to client
+            await websocket.send_json({
+                "type": "update",
+                "kpis": kpis,
+                "timestamp": datetime.now().isoformat()
+            })
+            
     except WebSocketDisconnect:
         logger.info("WebSocket client disconnected")
     except Exception as e:
         logger.error(f"WebSocket error: {e}")
+        await websocket.close()
 
 def main():
     """Main function to run the FastAPI application."""

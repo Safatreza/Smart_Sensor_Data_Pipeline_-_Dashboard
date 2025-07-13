@@ -10,13 +10,14 @@ Version: 2.0.0
 """
 
 import pandas as pd
-import sqlite3
 import os
 import random
 from datetime import datetime, timedelta
 import logging
 from typing import Dict, List, Optional, Tuple
 import math
+from pipeline.db_utils import get_engine, is_postgres, create_timescale_hypertable
+from sqlalchemy import text
 
 # Configure logging
 logging.basicConfig(
@@ -186,62 +187,41 @@ def transform_data(df: pd.DataFrame) -> Tuple[pd.DataFrame, dict]:
 
 def load_data(df: pd.DataFrame) -> bool:
     """
-    Load processed data into SQLite database. Adds indexes for fast queries.
+    Load processed data into the configured database. Adds indexes for fast queries.
     """
-    db_path = CONFIG['DB_PATH']
     table_name = CONFIG['TABLE_NAME']
-    
     try:
-        # Validate input DataFrame
         if df is None or len(df) == 0:
             logger.error("Cannot load empty or None DataFrame")
             return False
-        
-        # Ensure database directory exists
-        try:
-            os.makedirs(os.path.dirname(db_path), exist_ok=True)
-        except Exception as e:
-            logger.error(f"Error creating database directory: {e}")
-            return False
-        
-        logger.info(f"Loading {len(df)} records into database: {db_path}")
-        
-        # Connect to SQLite database with timeout
-        try:
-            conn = sqlite3.connect(db_path, timeout=30.0)
-        except sqlite3.Error as e:
-            logger.error(f"Database connection error: {e}")
-            return False
-        
-        try:
-            # Write DataFrame to SQLite
-            df.to_sql(table_name, conn, if_exists='replace', index=False)
-            cursor = conn.cursor()
-            # Indexes for fast queries
-            cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_timestamp ON {table_name} (timestamp)")
-            cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_uptime ON {table_name} (uptime)")
-            if 'temperature_alert' in df.columns:
-                cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_temp_alert ON {table_name} (temperature_alert)")
-            if 'pressure_alert' in df.columns:
-                cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_pressure_alert ON {table_name} (pressure_alert)")
-            # New: Indexes for temperature and pressure
-            cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_temperature ON {table_name} (temperature)")
-            cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_pressure ON {table_name} (pressure)")
-            conn.commit()
-            logger.info(f"Successfully loaded {len(df)} records into {table_name}")
-            return True
-            
-        except sqlite3.Error as e:
-            logger.error(f"Database operation error: {e}")
-            conn.rollback()
-            return False
-        except Exception as e:
-            logger.error(f"Unexpected error during database operations: {e}")
-            conn.rollback()
-            return False
-        finally:
-            conn.close()
-        
+        logger.info(f"Loading {len(df)} records into database table: {table_name}")
+        engine = get_engine()
+        # Write DataFrame to SQL database
+        df.to_sql(table_name, engine, if_exists='replace', index=False, method=None)
+        # Create indexes (SQLite or PostgreSQL)
+        with engine.connect() as conn:
+            if is_postgres():
+                # TimescaleDB hypertable
+                create_timescale_hypertable(table_name, time_column="timestamp")
+                conn.execute(text(f"CREATE INDEX IF NOT EXISTS idx_timestamp ON {table_name} (timestamp)"))
+                conn.execute(text(f"CREATE INDEX IF NOT EXISTS idx_uptime ON {table_name} (uptime)"))
+                if 'temperature_alert' in df.columns:
+                    conn.execute(text(f"CREATE INDEX IF NOT EXISTS idx_temp_alert ON {table_name} (temperature_alert)"))
+                if 'pressure_alert' in df.columns:
+                    conn.execute(text(f"CREATE INDEX IF NOT EXISTS idx_pressure_alert ON {table_name} (pressure_alert)"))
+                conn.execute(text(f"CREATE INDEX IF NOT EXISTS idx_temperature ON {table_name} (temperature)"))
+                conn.execute(text(f"CREATE INDEX IF NOT EXISTS idx_pressure ON {table_name} (pressure)"))
+            else:
+                conn.execute(text(f"CREATE INDEX IF NOT EXISTS idx_timestamp ON {table_name} (timestamp)"))
+                conn.execute(text(f"CREATE INDEX IF NOT EXISTS idx_uptime ON {table_name} (uptime)"))
+                if 'temperature_alert' in df.columns:
+                    conn.execute(text(f"CREATE INDEX IF NOT EXISTS idx_temp_alert ON {table_name} (temperature_alert)"))
+                if 'pressure_alert' in df.columns:
+                    conn.execute(text(f"CREATE INDEX IF NOT EXISTS idx_pressure_alert ON {table_name} (pressure_alert)"))
+                conn.execute(text(f"CREATE INDEX IF NOT EXISTS idx_temperature ON {table_name} (temperature)"))
+                conn.execute(text(f"CREATE INDEX IF NOT EXISTS idx_pressure ON {table_name} (pressure)"))
+        logger.info(f"Successfully loaded {len(df)} records into {table_name}")
+        return True
     except Exception as e:
         logger.error(f"Error loading data into database: {e}")
         return False
@@ -274,21 +254,10 @@ def save_processed_csv(df: pd.DataFrame) -> bool:
 def get_data_summary() -> Dict:
     """
     Get summary statistics of processed data from database.
-    
-    Returns:
-        Dictionary containing data summary and KPIs
     """
-    db_path = CONFIG['DB_PATH']
     table_name = CONFIG['TABLE_NAME']
-    
     try:
-        if not os.path.exists(db_path):
-            logger.warning(f"Database not found at {db_path}")
-            return {}
-        
-        conn = sqlite3.connect(db_path)
-        
-        # Get basic statistics
+        engine = get_engine()
         summary_query = f"""
             SELECT 
                 COUNT(*) as total_records,
@@ -301,13 +270,9 @@ def get_data_summary() -> Dict:
                 COUNT(CASE WHEN pressure_alert = 'red' THEN 1 END) as pressure_alerts
             FROM {table_name}
         """
-        
-        summary_df = pd.read_sql_query(summary_query, conn)
-        conn.close()
-        
+        summary_df = pd.read_sql(summary_query, engine)
         if len(summary_df) == 0:
             return {}
-        
         summary = {
             'total_records': int(summary_df['total_records'].iloc[0]),
             'date_range': {
@@ -324,9 +289,7 @@ def get_data_summary() -> Dict:
                 'pressure_alerts': int(summary_df['pressure_alerts'].iloc[0])
             }
         }
-        
         return summary
-        
     except Exception as e:
         logger.error(f"Error getting data summary: {e}")
         return {}
