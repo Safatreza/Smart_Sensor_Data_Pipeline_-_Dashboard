@@ -1,0 +1,262 @@
+# Smart Sensor Data Dashboard - Continuous Integration Workflow
+# This workflow runs code quality checks and linting to ensure code quality
+# and maintain consistency across the codebase for Crewmeister's DevOps practices
+
+name: CI - Code Quality & Linting
+
+# Trigger workflow on push to any branch
+on:
+  push:
+    branches: [ main, develop, feature/*, bugfix/* ]
+  pull_request:
+    branches: [ main, develop ]
+
+# Define the jobs
+jobs:
+  # Code Quality and Linting Job
+  code-quality:
+    name: Code Quality & Linting
+    runs-on: ubuntu-latest
+    
+    # Strategy for matrix testing (if needed in future)
+    strategy:
+      matrix:
+        python-version: [3.8, 3.9, "3.10"]
+    
+    steps:
+      # Step 1: Checkout the repository
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history for better linting context
+      
+      # Step 2: Set up Python environment
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'  # Enable pip caching for faster builds
+      
+      # Step 3: Install dependencies
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install flake8
+          pip install black
+          pip install mypy
+          pip install -r requirements.txt
+      
+      # Step 4: Run code formatting check with Black
+      - name: Check code formatting with Black
+        run: |
+          echo "Checking code formatting..."
+          black --check --diff pipeline/ dashboard/ demo/ tests/
+      
+      # Step 5: Run linting with flake8
+      - name: Run linting with flake8
+        run: |
+          echo "Running flake8 linting..."
+          flake8 pipeline/ dashboard/ demo/ tests/ --count --select=E9,F63,F7,F82 --show-source --statistics
+          flake8 pipeline/ dashboard/ demo/ tests/ --count --exit-zero --max-complexity=10 --max-line-length=88 --statistics
+      
+      # Step 6: Run type checking with mypy
+      - name: Run type checking with mypy
+        run: |
+          echo "Running mypy type checking..."
+          mypy pipeline/ dashboard/ --ignore-missing-imports --no-strict-optional
+      
+      # Step 7: Check for security vulnerabilities
+      - name: Security check with bandit
+        run: |
+          echo "Running security checks..."
+          pip install bandit
+          bandit -r pipeline/ dashboard/ -f json -o bandit-report.json || true
+          # Note: bandit warnings don't fail the build, but are reported
+      
+      # Step 8: Run unit tests
+      - name: Run unit tests
+        run: |
+          echo "Running unit tests..."
+          python -m pytest tests/ -v --tb=short
+      
+      # Step 9: Generate test coverage report
+      - name: Generate coverage report
+        run: |
+          echo "Generating coverage report..."
+          pip install pytest-cov
+          python -m pytest tests/ --cov=pipeline --cov=dashboard --cov-report=xml --cov-report=html
+      
+      # Step 10: Upload coverage reports
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./coverage.xml
+          flags: unittests
+          name: codecov-umbrella
+          fail_ci_if_error: false
+      
+      # Step 11: Check for outdated dependencies
+      - name: Check for outdated dependencies
+        run: |
+          echo "Checking for outdated dependencies..."
+          pip install pip-check-updates
+          pcu --dry-run requirements.txt || echo "Some dependencies may be outdated"
+      
+      # Step 12: Validate environment file
+      - name: Validate environment configuration
+        run: |
+          echo "Validating environment configuration..."
+          if [ -f env.example ]; then
+            echo "✓ env.example file exists"
+            # Check for required variables
+            grep -q "DATA_PATH" env.example && echo "✓ DATA_PATH found"
+            grep -q "DB_PATH" env.example && echo "✓ DB_PATH found"
+            grep -q "TABLE_NAME" env.example && echo "✓ TABLE_NAME found"
+          else
+            echo "✗ env.example file missing"
+            exit 1
+          fi
+      
+      # Step 13: Check file structure
+      - name: Validate project structure
+        run: |
+          echo "Validating project structure..."
+          # Check for required directories
+          [ -d "pipeline" ] && echo "✓ pipeline/ directory exists"
+          [ -d "dashboard" ] && echo "✓ dashboard/ directory exists"
+          [ -d "data" ] && echo "✓ data/ directory exists"
+          [ -d "demo" ] && echo "✓ demo/ directory exists"
+          [ -d "templates" ] && echo "✓ templates/ directory exists"
+          [ -d "tests" ] && echo "✓ tests/ directory exists"
+          
+          # Check for required files
+          [ -f "requirements.txt" ] && echo "✓ requirements.txt exists"
+          [ -f "README.md" ] && echo "✓ README.md exists"
+          [ -f ".gitignore" ] && echo "✓ .gitignore exists"
+      
+      # Step 14: Check for sensitive data
+      - name: Check for sensitive data
+        run: |
+          echo "Checking for sensitive data..."
+          # Check for hardcoded secrets
+          if grep -r "password\|secret\|key\|token" pipeline/ dashboard/ --exclude="*.pyc" --exclude="__pycache__" | grep -v "example\|test\|mock"; then
+            echo "⚠️  Potential hardcoded secrets found"
+            exit 1
+          else
+            echo "✓ No hardcoded secrets found"
+          fi
+      
+      # Step 15: Validate CSV data files
+      - name: Validate data files
+        run: |
+          echo "Validating data files..."
+          if [ -f "data/simulated_raw.csv" ]; then
+            echo "✓ simulated_raw.csv exists"
+            # Check CSV structure
+            head -1 data/simulated_raw.csv | grep -q "timestamp,temperature,pressure,uptime" && echo "✓ CSV header is correct"
+          else
+            echo "⚠️  simulated_raw.csv missing (may be expected in CI)"
+          fi
+      
+      # Step 16: Performance check (basic)
+      - name: Basic performance check
+        run: |
+          echo "Running basic performance checks..."
+          # Check for obvious performance issues
+          if find pipeline/ dashboard/ -name "*.py" -exec grep -l "for.*for\|while.*while" {} \;; then
+            echo "⚠️  Potential nested loops found"
+          else
+            echo "✓ No obvious nested loops found"
+          fi
+      
+      # Step 17: Documentation check
+      - name: Check documentation
+        run: |
+          echo "Checking documentation..."
+          # Check for docstrings in Python files
+          python -c "
+          import ast
+          import os
+          
+          def check_docstrings(directory):
+              missing_docs = []
+              for root, dirs, files in os.walk(directory):
+                  for file in files:
+                      if file.endswith('.py'):
+                          filepath = os.path.join(root, file)
+                          try:
+                              with open(filepath, 'r') as f:
+                                  tree = ast.parse(f.read())
+                              for node in ast.walk(tree):
+                                  if isinstance(node, (ast.FunctionDef, ast.ClassDef, ast.Module)):
+                                      if not ast.get_docstring(node):
+                                          missing_docs.append(f'{filepath}:{node.lineno}')
+                          except:
+                              pass
+              return missing_docs
+          
+          missing = check_docstrings('pipeline') + check_docstrings('dashboard')
+          if missing:
+              print('⚠️  Missing docstrings in:', len(missing), 'locations')
+              for m in missing[:5]:  # Show first 5
+                  print('  ', m)
+          else:
+              print('✓ All functions and classes have docstrings')
+          "
+      
+      # Step 18: Final status report
+      - name: CI Status Report
+        run: |
+          echo "=========================================="
+          echo "🚀 CI Pipeline Completed Successfully!"
+          echo "=========================================="
+          echo "✓ Code formatting checked"
+          echo "✓ Linting completed"
+          echo "✓ Type checking passed"
+          echo "✓ Unit tests executed"
+          echo "✓ Security checks performed"
+          echo "✓ Project structure validated"
+          echo "=========================================="
+          echo "Ready for deployment! 🎉"
+      
+      # Step 19: Upload artifacts (if needed)
+      - name: Upload test results
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: test-results-${{ matrix.python-version }}
+          path: |
+            htmlcov/
+            bandit-report.json
+            coverage.xml
+          retention-days: 7
+
+  # Additional job for dependency security scanning (optional)
+  security-scan:
+    name: Security Dependency Scan
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: 3.9
+      
+      - name: Install safety
+        run: |
+          pip install safety
+      
+      - name: Run safety check
+        run: |
+          safety check --json --output safety-report.json || true
+      
+      - name: Upload safety report
+        uses: actions/upload-artifact@v3
+        with:
+          name: safety-report
+          path: safety-report.json
+          retention-days: 30 
