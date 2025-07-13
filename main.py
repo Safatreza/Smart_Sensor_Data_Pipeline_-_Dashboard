@@ -90,6 +90,7 @@ def init_database():
                     alert_level TEXT DEFAULT 'normal'
                 )
             """))
+            conn.commit()
             
             # Check if table is empty, if so populate with sample data
             count_query = text(f"SELECT COUNT(*) FROM {TABLE_NAME}")

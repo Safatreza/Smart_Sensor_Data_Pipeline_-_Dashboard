@@ -104,6 +104,8 @@ def load_demo_data(csv_path: str = "../data/simulated_processed.csv") -> Tuple[L
                         alert_count += 1
                     elif 'pressure_alert' in row and row['pressure_alert'] == 'red':
                         alert_count += 1
+                    elif 'alert_status' in row and row['alert_status'] == 'red':
+                        alert_count += 1
                     
                     # Update KPIs
                     total_temp += row['temperature']
